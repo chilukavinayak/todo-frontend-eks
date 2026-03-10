@@ -13,7 +13,7 @@ pipeline {
     
     options {
         buildDiscarder(logRotator(numToKeepStr: '20'))
-        timeout(time: 45, unit: 'MINUTES')
+        timeout(time: 30, unit: 'MINUTES')
         disableConcurrentBuilds()
     }
     
@@ -90,38 +90,26 @@ def deployToDev() {
         aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
         
         echo "========================================"
-        echo "CLEANING UP EXISTING RESOURCES"
-        echo "========================================"
-        
-        kubectl delete deployment tresvita-todo-frontend -n frontend 2>/dev/null || true
-        kubectl delete serviceaccount frontend-sa -n frontend 2>/dev/null || true
-        kubectl delete service tresvita-todo-frontend -n frontend 2>/dev/null || true
-        kubectl delete configmap tresvita-todo-frontend -n frontend 2>/dev/null || true
-        
-        sleep 5
-        
-        echo ""
-        echo "========================================"
         echo "DEPLOYING FRONTEND TO DEV"
         echo "========================================"
         
+        # Uninstall first to ensure clean state
+        helm uninstall ${APP_NAME} -n frontend 2>/dev/null || true
+        sleep 5
+        
+        # Install with debug output
         helm upgrade --install ${APP_NAME} /tmp/infra-eks-terraform/helm_charts/todo-frontend \
           --namespace frontend \
           --values /tmp/infra-eks-terraform/helm_charts/todo-frontend/values-dev.yaml \
           --set image.repository=${ECR_REPO}/${IMAGE_NAME} \
           --set image.tag=dev \
-          --timeout 10m \
-          --atomic \
-          --cleanup-on-fail
+          --timeout 3m \
+          --debug
         
         echo ""
-        echo "Waiting for deployment..."
-        sleep 10
-        
-        echo ""
-        echo "Deployment Status:"
+        echo "Checking pod status..."
         kubectl get pods -n frontend
-        kubectl get svc -n frontend
+        kubectl describe pods -n frontend 2>/dev/null || true
     """
     
     echo ""
