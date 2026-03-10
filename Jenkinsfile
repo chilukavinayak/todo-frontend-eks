@@ -63,7 +63,7 @@ pipeline {
         stage('Deploy to Dev') {
             when { branch 'develop' }
             steps {
-                deployToEKS('dev')
+                deployToDev()
             }
         }
         
@@ -100,6 +100,47 @@ pipeline {
             cleanWs()
         }
     }
+}
+
+def deployToDev() {
+    sh """
+        aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
+        
+        echo "Deploying to DEV environment..."
+        helm upgrade --install ${APP_NAME} ../infra-eks-terraform/helm_charts/todo-frontend \
+          --namespace frontend \
+          --values ../infra-eks-terraform/helm_charts/todo-frontend/values-dev.yaml \
+          --set image.repository=${ECR_REPO}/${IMAGE_NAME} \
+          --set image.tag=${IMAGE_TAG} \
+          --wait --timeout 5m
+        
+        echo ""
+        echo "Waiting for ALB to be created..."
+        sleep 30
+        
+        echo ""
+        echo "Getting ALB URL..."
+        ALB_URL=\$(kubectl get ingress ${APP_NAME} -n frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "Not ready yet")
+        echo "Frontend ALB URL: http://\${ALB_URL}"
+        
+        echo ""
+        echo "Deployment Status:"
+        kubectl get pods -n frontend
+        kubectl get svc -n frontend
+        kubectl get ingress -n frontend
+    """
+    
+    echo ""
+    echo "========================================="
+    echo "FRONTEND DEPLOYED TO DEV"
+    echo "========================================="
+    echo "To get the URL, run:"
+    echo "kubectl get ingress tresvita-todo-frontend -n frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'"
+    echo ""
+    echo "Or access via port-forward:"
+    echo "kubectl port-forward svc/tresvita-todo-frontend 3000:80 -n frontend"
+    echo "Then open: http://localhost:3000"
+    echo "========================================="
 }
 
 def deployToEKS(environment) {
