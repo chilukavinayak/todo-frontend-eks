@@ -1,78 +1,115 @@
+#!/usr/bin/env groovy
+
 pipeline {
     agent any
     
     environment {
         AWS_REGION = 'us-west-2'
         AWS_ACCOUNT_ID = credentials('aws-account-id')
-        ECR_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.us-west-2.amazonaws.com/tresvita-todo-frontend"
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
-    }
-    
-    triggers {
-        // Trigger pipeline on push to GitHub/GitLab webhook
-        // Requires webhook to be configured in GitHub/GitLab repository settings
-        githubPush()
+        ECR_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.us-west-2.amazonaws.com"
+        IMAGE_NAME = 'tresvita-todo-frontend'
+        APP_NAME = 'tresvita-todo-frontend'
     }
     
     options {
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        buildDiscarder(logRotator(numToKeepStr: '20'))
         timeout(time: 30, unit: 'MINUTES')
         disableConcurrentBuilds()
+    }
+    
+    triggers {
+        githubPush()
     }
     
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'git log -1'
+                script {
+                    // Determine environment from branch
+                    env.GIT_BRANCH = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
+                    env.DEPLOY_ENV = env.GIT_BRANCH == 'main' ? 'prod' : 
+                                     env.GIT_BRANCH == 'staging' ? 'staging' : 'dev'
+                    env.IMAGE_TAG = "${DEPLOY_ENV}-${BUILD_NUMBER}"
+                    echo "Branch: ${GIT_BRANCH}, Deploy Env: ${DEPLOY_ENV}, Image Tag: ${IMAGE_TAG}"
+                }
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                sh 'npm install'
+                sh '''
+                    npm ci
+                '''
             }
         }
         
-        stage('Lint') {
+        stage('Lint & Test') {
             steps {
-                sh 'npm run lint || echo "No lint script, skipping"'
+                sh '''
+                    npm run lint || true
+                    npm test -- --coverage --watchAll=false || true
+                '''
             }
-        }
-        
-        stage('Test') {
-            steps {
-                sh 'npm test -- --coverage --watchAll=false || echo "No tests, skipping"'
-            }
-        }
-        
-        stage('Build Application') {
-            steps {
-                sh 'npm run build'
-            }
-        }
-        
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    def image = docker.build("${ECR_REPO}:${IMAGE_TAG}")
+            post {
+                always {
+                    publishHTML([
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'coverage',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
                 }
             }
         }
         
-        stage('Push to ECR') {
+        stage('Build App') {
+            steps {
+                sh '''
+                    npm run build
+                '''
+            }
+        }
+        
+        stage('Docker Build & Push') {
             steps {
                 script {
-                    sh """
+                    // Login to ECR
+                    sh '''
                         aws ecr get-login-password --region ${AWS_REGION} | \
                         docker login --username AWS --password-stdin ${ECR_REPO}
-                        
-                        docker push ${ECR_REPO}:${IMAGE_TAG}
-                        
-                        docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REPO}:latest
-                        docker push ${ECR_REPO}:latest
-                    """
+                    '''
+                    
+                    // Build Docker image
+                    sh '''
+                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPO}/${IMAGE_NAME}:${IMAGE_TAG}
+                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPO}/${IMAGE_NAME}:latest
+                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPO}/${IMAGE_NAME}:${DEPLOY_ENV}
+                    '''
+                    
+                    // Push to ECR
+                    sh '''
+                        docker push ${ECR_REPO}/${IMAGE_NAME}:${IMAGE_TAG}
+                        docker push ${ECR_REPO}/${IMAGE_NAME}:latest
+                        docker push ${ECR_REPO}/${IMAGE_NAME}:${DEPLOY_ENV}
+                    '''
                 }
+            }
+        }
+        
+        stage('Security Scan') {
+            steps {
+                sh '''
+                    # Install Trivy if not present
+                    which trivy || curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+                    
+                    # Scan image
+                    trivy image --severity HIGH,CRITICAL --exit-code 0 \
+                      ${ECR_REPO}/${IMAGE_NAME}:${IMAGE_TAG} || true
+                '''
             }
         }
         
@@ -81,28 +118,25 @@ pipeline {
                 branch 'develop'
             }
             steps {
-                sh """
-                    # Configure kubectl to connect to EKS cluster
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
-                    
-                    # Deploy using Helm chart
-                    # --install: Install if doesn't exist, upgrade if exists
-                    # --namespace: Target namespace for deployment
-                    # --values: Use development-specific configuration
-                    # --set image.repository: Override ECR repository URL
-                    # --set image.tag: Use build number as unique image tag
-                    # --wait: Wait for deployment to complete
-                    helm upgrade --install tresvita-todo-frontend ../infra-eks-terraform/helm_charts/todo-frontend \
-                        --namespace frontend \
-                        --values ../infra-eks-terraform/helm_charts/todo-frontend/values-dev.yaml \
-                        --set image.repository=${ECR_REPO} \
-                        --set image.tag=${IMAGE_TAG} \
-                        --wait \
-                        --timeout 5m
-                    
-                    # Verify deployment succeeded
-                    kubectl rollout status deployment/tresvita-todo-frontend -n frontend --timeout=300s
-                """
+                deployHelm('dev')
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            when {
+                branch 'staging'
+            }
+            steps {
+                deployHelm('staging')
+            }
+        }
+        
+        stage('Approval for Production') {
+            when {
+                branch 'main'
+            }
+            steps {
+                input message: 'Deploy to Production?', ok: 'Deploy'
             }
         }
         
@@ -111,40 +145,43 @@ pipeline {
                 branch 'main'
             }
             steps {
-                # Manual approval required before production deployment
-                input message: 'Deploy to Production?', ok: 'Deploy'
-                
-                sh """
-                    # Configure kubectl to connect to EKS cluster
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
-                    
-                    # Deploy using Helm chart with production values
-                    # Uses values-prod.yaml for production-specific configuration
-                    # Higher replica count and resource limits
-                    helm upgrade --install tresvita-todo-frontend ../infra-eks-terraform/helm_charts/todo-frontend \
-                        --namespace frontend \
-                        --values ../infra-eks-terraform/helm_charts/todo-frontend/values-prod.yaml \
-                        --set image.repository=${ECR_REPO} \
-                        --set image.tag=${IMAGE_TAG} \
-                        --wait \
-                        --timeout 10m
-                    
-                    # Verify deployment succeeded
-                    kubectl rollout status deployment/tresvita-todo-frontend -n frontend --timeout=600s
-                """
+                deployHelm('prod')
             }
         }
     }
     
     post {
+        success {
+            echo "✅ Build ${BUILD_NUMBER} successful!"
+            echo "Image: ${ECR_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+        }
+        failure {
+            echo "❌ Build ${BUILD_NUMBER} failed!"
+        }
         always {
             cleanWs()
         }
-        success {
-            echo '✅ Tresvita Frontend Pipeline completed successfully!'
-        }
-        failure {
-            echo '❌ Tresvita Frontend Pipeline failed!'
-        }
     }
+}
+
+def deployHelm(environment) {
+    sh """
+        aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-${environment}
+        
+        helm upgrade --install ${APP_NAME} \
+          ../infra-eks-terraform/helm_charts/todo-frontend \
+          --namespace frontend \
+          --set image.repository=${ECR_REPO}/${IMAGE_NAME} \
+          --set image.tag=${IMAGE_TAG} \
+          --set replicaCount=${environment == 'prod' ? 3 : 2} \
+          --set ingress.hosts[0].host=app-${environment}.tresvita.local \
+          --set env[0].name=REACT_APP_API_URL,env[0].value=http://api-${environment}.tresvita.local/api \
+          --wait \
+          --timeout 5m \
+          --atomic
+        
+        kubectl rollout status deployment/${APP_NAME} -n frontend --timeout=300s
+        kubectl get svc -n frontend
+        kubectl get ingress -n frontend
+    """
 }
