@@ -62,10 +62,7 @@ pipeline {
         
         stage('Deploy to Dev') {
             when {
-                anyOf {
-                    branch 'develop'
-                    branch 'master'
-                }
+                branch 'master'
             }
             steps {
                 deployToDev()
@@ -75,10 +72,10 @@ pipeline {
     
     post {
         success {
-            echo "Frontend Build ${BUILD_NUMBER} successful!"
+            echo "SUCCESS: Build ${BUILD_NUMBER} completed!"
         }
         failure {
-            echo "Frontend Build ${BUILD_NUMBER} failed!"
+            echo "FAILED: Build ${BUILD_NUMBER}"
         }
         always {
             cleanWs()
@@ -90,7 +87,10 @@ def deployToDev() {
     sh """
         aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
         
-        echo "Deploying Frontend to DEV environment..."
+        echo "========================================"
+        echo "DEPLOYING TO DEV ENVIRONMENT"
+        echo "========================================"
+        
         helm upgrade --install ${APP_NAME} ../infra-eks-terraform/helm_charts/todo-frontend \
           --namespace frontend \
           --values ../infra-eks-terraform/helm_charts/todo-frontend/values-dev.yaml \
@@ -99,24 +99,29 @@ def deployToDev() {
           --wait --timeout 5m
         
         echo ""
-        echo "Waiting for ALB..."
-        sleep 30
-        
-        echo ""
-        echo "Getting ALB URL..."
-        ALB_URL=\\$(kubectl get ingress ${APP_NAME} -n frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "Pending")
-        echo "Frontend URL: http://\\${ALB_URL}"
-        
-        echo ""
+        echo "Deployment Status:"
         kubectl get pods -n frontend
         kubectl get svc -n frontend
-        kubectl get ingress -n frontend
     """
     
     echo ""
-    echo "========================================="
-    echo "FRONTEND DEPLOYED TO DEV"
-    echo "========================================="
-    echo "To get ALB URL: kubectl get ingress tresvita-todo-frontend -n frontend"
-    echo "========================================="
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║              DEV DEPLOYMENT SUCCESSFUL!                      ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "📱 HOW TO ACCESS FRONTEND:"
+    echo ""
+    echo "   Run this command:"
+    echo "   kubectl port-forward svc/tresvita-todo-frontend 3000:80 -n frontend"
+    echo ""
+    echo "   Then open: http://localhost:3000"
+    echo ""
+    echo "🔗 BACKEND API:"
+    echo "   Internal URL: http://tresvita-todo-backend.backend.svc.cluster.local:8080/api"
+    echo ""
+    echo "📊 CHECK STATUS:"
+    echo "   kubectl get pods -n frontend"
+    echo "   kubectl logs -n frontend -l app=tresvita-todo-frontend"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
 }
