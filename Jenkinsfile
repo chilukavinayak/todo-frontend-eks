@@ -28,6 +28,15 @@ pipeline {
             }
         }
         
+        stage('Checkout Infra Repo') {
+            steps {
+                sh '''
+                    git clone https://github.com/chilukavinayak/infra-eks-terraform.git /tmp/infra-eks-terraform
+                    ls -la /tmp/infra-eks-terraform/helm_charts/todo-frontend/
+                '''
+            }
+        }
+        
         stage('Build') {
             steps {
                 sh 'npm ci'
@@ -81,12 +90,12 @@ def deployToDev() {
         aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
         
         echo "========================================"
-        echo "DEPLOYING TO DEV ENVIRONMENT"
+        echo "DEPLOYING FRONTEND TO DEV"
         echo "========================================"
         
-        helm upgrade --install ${APP_NAME} ../infra-eks-terraform/helm_charts/todo-frontend \
+        helm upgrade --install ${APP_NAME} /tmp/infra-eks-terraform/helm_charts/todo-frontend \
           --namespace frontend \
-          --values ../infra-eks-terraform/helm_charts/todo-frontend/values-dev.yaml \
+          --values /tmp/infra-eks-terraform/helm_charts/todo-frontend/values-dev.yaml \
           --set image.repository=${ECR_REPO}/${IMAGE_NAME} \
           --set image.tag=dev \
           --wait --timeout 5m
@@ -98,16 +107,10 @@ def deployToDev() {
     """
     
     echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║              DEV DEPLOYMENT SUCCESSFUL!                      ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "📱 ACCESS FRONTEND:"
-    echo "   kubectl port-forward svc/tresvita-todo-frontend 3000:80 -n frontend"
-    echo "   Then open: http://localhost:3000"
-    echo ""
-    echo "🔗 BACKEND API:"
-    echo "   http://tresvita-todo-backend.backend.svc.cluster.local:8080/api"
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "========================================"
+    echo "FRONTEND DEPLOYED TO DEV"
+    echo "========================================"
+    echo "Access: kubectl port-forward svc/tresvita-todo-frontend 3000:80 -n frontend"
+    echo "Then: http://localhost:3000"
+    echo "========================================"
 }
