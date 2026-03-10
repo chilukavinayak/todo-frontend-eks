@@ -46,7 +46,7 @@ RUN chown -R appuser:appgroup /usr/share/nginx/html && \
 USER appuser
 
 # Expose port
-EXPOSE 80
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
