@@ -33,7 +33,6 @@ pipeline {
                 sh '''
                     rm -rf /tmp/infra-eks-terraform
                     git clone https://github.com/chilukavinayak/infra-eks-terraform.git /tmp/infra-eks-terraform
-                    ls -la /tmp/infra-eks-terraform/helm_charts/todo-frontend/
                 '''
             }
         }
@@ -90,6 +89,19 @@ def deployToDev() {
     sh """
         aws eks update-kubeconfig --region ${AWS_REGION} --name tresvita-todo-app-dev
         
+        echo "========================================"
+        echo "CLEANING UP EXISTING RESOURCES"
+        echo "========================================"
+        
+        # Delete existing resources that might conflict
+        kubectl delete deployment tresvita-todo-frontend -n frontend 2>/dev/null || true
+        kubectl delete serviceaccount frontend-sa -n frontend 2>/dev/null || true
+        kubectl delete service tresvita-todo-frontend -n frontend 2>/dev/null || true
+        kubectl delete configmap tresvita-todo-frontend -n frontend 2>/dev/null || true
+        
+        sleep 5
+        
+        echo ""
         echo "========================================"
         echo "DEPLOYING FRONTEND TO DEV"
         echo "========================================"
