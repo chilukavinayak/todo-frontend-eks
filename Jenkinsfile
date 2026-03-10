@@ -25,10 +25,6 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                script {
-                    env.GIT_BRANCH = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
-                    echo "Building branch: ${env.GIT_BRANCH}"
-                }
             }
         }
         
@@ -61,9 +57,6 @@ pipeline {
         }
         
         stage('Deploy to Dev') {
-            when {
-                branch 'master'
-            }
             steps {
                 deployToDev()
             }
@@ -109,19 +102,12 @@ def deployToDev() {
     echo "║              DEV DEPLOYMENT SUCCESSFUL!                      ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
-    echo "📱 HOW TO ACCESS FRONTEND:"
-    echo ""
-    echo "   Run this command:"
+    echo "📱 ACCESS FRONTEND:"
     echo "   kubectl port-forward svc/tresvita-todo-frontend 3000:80 -n frontend"
-    echo ""
     echo "   Then open: http://localhost:3000"
     echo ""
     echo "🔗 BACKEND API:"
-    echo "   Internal URL: http://tresvita-todo-backend.backend.svc.cluster.local:8080/api"
-    echo ""
-    echo "📊 CHECK STATUS:"
-    echo "   kubectl get pods -n frontend"
-    echo "   kubectl logs -n frontend -l app=tresvita-todo-frontend"
+    echo "   http://tresvita-todo-backend.backend.svc.cluster.local:8080/api"
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
 }
