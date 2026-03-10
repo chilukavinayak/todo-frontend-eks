@@ -31,6 +31,7 @@ pipeline {
         stage('Checkout Infra Repo') {
             steps {
                 sh '''
+                    rm -rf /tmp/infra-eks-terraform
                     git clone https://github.com/chilukavinayak/infra-eks-terraform.git /tmp/infra-eks-terraform
                     ls -la /tmp/infra-eks-terraform/helm_charts/todo-frontend/
                 '''
